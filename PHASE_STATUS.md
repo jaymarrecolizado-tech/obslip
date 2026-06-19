@@ -180,6 +180,12 @@ gaps in the running `obpass/` app. The following were fixed; tests now **76/76 b
 **PDF**
 - Pass-slip PDF now generates both **ORIGINAL + DUPLICATE** copies (page break between).
 
+**Runtime bug found by running the app (not caught by tests)**
+- Sanctum login was broken under MySQL: `personal_access_tokens.tokenable_id`
+  was `unsignedBigInteger` (from `morphs()`) but users use UUID PKs, so issuing a
+  token truncated the value. Tests missed it because they use `Sanctum::actingAs`
+  (bypasses token storage). Fixed via `uuidMorphs('tokenable')`.
+
 ### Accepted deviations / deferred (not blocking; flagged for decision)
 - **PDF engine**: uses `barryvdh/laravel-dompdf`, not the spec's `spatie/browsershot`.
   Kept DomPDF (working) to avoid a risky headless-Chrome dependency swap.
