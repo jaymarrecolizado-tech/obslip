@@ -43,7 +43,8 @@
     </style>
 </head>
 <body>
-    <div class="page">
+    @foreach($copies as $copyLabel)
+    <div class="page" @if(! $loop->last) style="page-break-after: always;" @endif>
         {{-- Header --}}
         <div class="header">
             <h1>{{ $companyName }}</h1>
@@ -159,5 +160,6 @@
             Generated on {{ now()->format('M d, Y h:i A') }} | {{ $companyName }}
         </div>
     </div>
+    @endforeach
 </body>
 </html>

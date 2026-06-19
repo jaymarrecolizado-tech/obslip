@@ -37,6 +37,8 @@ class CertificateController extends Controller
 
     public function store(CertificateRequest $request, NotificationService $notifications): JsonResponse
     {
+        $this->authorize('create', Certificate::class);
+
         $certificate = Certificate::create(array_merge(
             $request->validated(),
             [
@@ -79,6 +81,8 @@ class CertificateController extends Controller
 
     public function verify(Certificate $certificate, Request $request, NotificationService $notifications): JsonResponse
     {
+        $this->authorize('verify', $certificate);
+
         if ($certificate->status !== CertificateStatus::Submitted) {
             return $this->errorResponse('Only submitted certificates can be verified.', 422);
         }

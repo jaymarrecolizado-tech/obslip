@@ -30,7 +30,7 @@ class PdfService
         $this->showQr = Setting::getValue('pdf_show_qr', true);
     }
 
-    public function generatePassSlipPdf(PassSlip $passSlip, string $copyLabel = 'ORIGINAL'): string
+    public function generatePassSlipPdf(PassSlip $passSlip, bool $includeDuplicate = true): string
     {
         $passSlip->load(['creator', 'supervisor', 'approver', 'employees', 'department', 'vehicle']);
 
@@ -38,6 +38,9 @@ class PdfService
         if ($this->showQr && $passSlip->qr_code) {
             $qrCodeImage = $this->generateQrDataUri($passSlip->qr_verification_url);
         }
+
+        // Spec: "Generate duplicate copies (original + duplicate)."
+        $copies = $includeDuplicate ? ['ORIGINAL', 'DUPLICATE'] : ['ORIGINAL'];
 
         $data = [
             'passSlip' => $passSlip,
@@ -47,13 +50,13 @@ class PdfService
             'primaryColor' => $this->primaryColor,
             'showQr' => $this->showQr,
             'qrCodeImage' => $qrCodeImage,
-            'copyLabel' => $copyLabel,
+            'copies' => $copies,
         ];
 
         $html = view('pdf.pass-slip', $data)->render();
         $pdf = Pdf::loadHtml($html)->setPaper('a4', 'portrait');
 
-        $filename = "pass_slips/{$passSlip->slip_number}_{$copyLabel}.pdf";
+        $filename = "pass_slips/{$passSlip->slip_number}.pdf";
         $path = "pdfs/{$filename}";
 
         Storage::disk('public')->makeDirectory('pdfs/pass_slips');

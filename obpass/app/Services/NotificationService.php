@@ -42,6 +42,38 @@ class NotificationService
     }
 
     /**
+     * Notify the employee(s)/creator that a pass slip was submitted (confirmation).
+     * Spec: SlipSubmitted → Supervisor + Employee.
+     */
+    public function notifyEmployeeOnSubmit(PassSlip $passSlip): void
+    {
+        if (! Setting::getValue('notify_employee_on_submit', true)) {
+            return;
+        }
+
+        $notifiables = collect([$passSlip->creator]);
+
+        foreach ($passSlip->employees as $employee) {
+            if ($employee->user && $employee->user->id !== $passSlip->creator_id) {
+                $notifiables->push($employee->user);
+            }
+        }
+
+        foreach ($notifiables->filter() as $user) {
+            $this->create(
+                type: 'status_change',
+                notifiable: $user,
+                data: [
+                    'action' => 'submitted',
+                    'pass_slip_id' => $passSlip->id,
+                    'slip_number' => $passSlip->slip_number,
+                    'message' => "Your pass slip {$passSlip->slip_number} has been submitted for approval.",
+                ]
+            );
+        }
+    }
+
+    /**
      * Notify employee(s) when a pass slip is approved.
      */
     public function notifyEmployeeOnApprove(PassSlip $passSlip): void
@@ -64,6 +96,30 @@ class NotificationService
                     'pass_slip_id' => $passSlip->id,
                     'slip_number' => $passSlip->slip_number,
                     'message' => "Your pass slip {$passSlip->slip_number} has been approved.",
+                ]
+            );
+        }
+    }
+
+    /**
+     * Notify guards when a pass slip is approved (so they expect the departure).
+     * Spec: SlipApproved → Employee + Guard.
+     */
+    public function notifyGuardsOnApprove(PassSlip $passSlip): void
+    {
+        $guards = User::where('is_active', true)
+            ->whereHas('roles', fn ($q) => $q->where('name', 'Guard'))
+            ->get();
+
+        foreach ($guards as $guard) {
+            $this->create(
+                type: 'status_change',
+                notifiable: $guard,
+                data: [
+                    'action' => 'approved',
+                    'pass_slip_id' => $passSlip->id,
+                    'slip_number' => $passSlip->slip_number,
+                    'message' => "Pass slip {$passSlip->slip_number} has been approved and is ready for departure.",
                 ]
             );
         }
@@ -160,7 +216,8 @@ class NotificationService
     }
 
     /**
-     * Notify HR when a certificate is submitted.
+     * Notify HR and Admin when a certificate is submitted.
+     * Spec: CertificateSubmitted → HR + Admin.
      */
     public function notifyHrOnCertificate(PassSlip $passSlip): void
     {
@@ -169,7 +226,7 @@ class NotificationService
         }
 
         $hrUsers = User::where('is_active', true)
-            ->whereHas('roles', fn ($q) => $q->where('name', 'HR'))
+            ->whereHas('roles', fn ($q) => $q->whereIn('name', ['HR', 'Admin']))
             ->get();
 
         $employeeNames = $passSlip->employees->pluck('full_name')->implode(', ');

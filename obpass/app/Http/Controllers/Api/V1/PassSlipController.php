@@ -56,6 +56,8 @@ class PassSlipController extends Controller
 
     public function store(PassSlipRequest $request): JsonResponse
     {
+        $this->authorize('create', PassSlip::class);
+
         $data = $request->validated();
         $data['creator_id'] = $request->user()->id;
         $data['status'] = PassSlipStatus::Draft;
@@ -85,6 +87,8 @@ class PassSlipController extends Controller
 
     public function update(PassSlipRequest $request, PassSlip $passSlip): JsonResponse
     {
+        $this->authorize('update', $passSlip);
+
         if ($passSlip->status !== PassSlipStatus::Draft) {
             return $this->errorResponse('Cannot edit a pass slip in this status.', 422);
         }
@@ -109,6 +113,8 @@ class PassSlipController extends Controller
 
     public function destroy(PassSlip $passSlip): JsonResponse
     {
+        $this->authorize('delete', $passSlip);
+
         if (! in_array($passSlip->status, [PassSlipStatus::Draft])) {
             return $this->errorResponse('Only draft pass slips can be deleted.', 422);
         }
@@ -121,9 +127,13 @@ class PassSlipController extends Controller
 
     public function submit(PassSlip $passSlip, NotificationService $notifications): JsonResponse
     {
+        $this->authorize('submit', $passSlip);
+
         if (! $passSlip->submit()) {
-            return $this->errorResponse('Only draft pass slips can be submitted.', 422);
+            return $this->errorResponse('Only draft or returned pass slips can be submitted.', 422);
         }
+
+        $notifications->notifyEmployeeOnSubmit($passSlip);
 
         $passSlip->load(['creator', 'employees', 'department', 'vehicle', 'supervisor', 'approver']);
         $notifications->notifySupervisorOnSubmit($passSlip);
@@ -144,6 +154,7 @@ class PassSlipController extends Controller
 
         $passSlip->load(['creator', 'employees', 'department', 'vehicle', 'supervisor', 'approver']);
         $notifications->notifyEmployeeOnApprove($passSlip);
+        $notifications->notifyGuardsOnApprove($passSlip);
 
         return $this->successResponse(
             new PassSlipResource($passSlip),
@@ -153,6 +164,8 @@ class PassSlipController extends Controller
 
     public function returnSlip(PassSlip $passSlip, Request $request, NotificationService $notifications): JsonResponse
     {
+        $this->authorize('returnSlip', $passSlip);
+
         $request->validate(['returned_reason' => ['required', 'string', 'max:500']]);
 
         if (! $passSlip->returnWithReason($request->user(), $request->returned_reason)) {
@@ -168,9 +181,11 @@ class PassSlipController extends Controller
         );
     }
 
-    public function cancel(PassSlip $passSlip): JsonResponse
+    public function cancel(Request $request, PassSlip $passSlip): JsonResponse
     {
-        if (! $passSlip->cancel()) {
+        $this->authorize('cancel', $passSlip);
+
+        if (! $passSlip->cancel($request->user())) {
             return $this->errorResponse('Cannot cancel this pass slip.', 422);
         }
 
@@ -211,27 +226,12 @@ class PassSlipController extends Controller
         ]);
     }
 
-    public function verifyQr(string $qr_code): JsonResponse
+    public function verifyQr(string $qr_code)
     {
         $passSlip = PassSlip::where('qr_code', $qr_code)
-            ->with('employees')
+            ->with(['employees', 'department'])
             ->first();
 
-        if (! $passSlip) {
-            return $this->errorResponse('Pass slip not found.', 404);
-        }
-
-        return $this->successResponse([
-            'slip_number' => $passSlip->slip_number,
-            'employees' => $passSlip->employees->map(fn ($emp) => [
-                'id' => $emp->id,
-                'full_name' => $emp->full_name,
-                'employee_number' => $emp->employee_number,
-            ]),
-            'status' => $passSlip->status?->value,
-            'date' => $passSlip->date?->toDateString(),
-            'purpose' => $passSlip->purpose,
-            'duration_hours' => $passSlip->duration_hours,
-        ]);
+        return view('verify.index', ['passSlip' => $passSlip]);
     }
 }

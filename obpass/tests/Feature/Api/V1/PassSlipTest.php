@@ -261,7 +261,7 @@ class PassSlipTest extends TestCase
         $response->assertStatus(422)
             ->assertJson([
                 'success' => false,
-                'message' => 'Only draft pass slips can be submitted.',
+                'message' => 'Only draft or returned pass slips can be submitted.',
             ]);
     }
 
@@ -300,11 +300,7 @@ class PassSlipTest extends TestCase
 
         $response = $this->postJson("/api/v1/pass-slips/{$slip->id}/approve");
 
-        $response->assertStatus(422)
-            ->assertJson([
-                'success' => false,
-                'message' => 'Only submitted pass slips can be approved.',
-            ]);
+        $response->assertStatus(403);
     }
 
     public function test_supervisor_can_return_submitted_slip(): void
@@ -571,5 +567,81 @@ class PassSlipTest extends TestCase
 
         $slip = PassSlip::where('creator_id', $this->employee->id)->first();
         $this->assertEquals($vehicle->id, $slip->vehicle_id);
+    }
+
+    public function test_returned_slip_can_be_resubmitted(): void
+    {
+        $slip = PassSlip::factory()->create([
+            'creator_id' => $this->employee->id,
+            'department_id' => $this->department->id,
+            'status' => PassSlipStatus::Returned,
+            'returned_reason' => 'Needs more detail',
+        ]);
+
+        Sanctum::actingAs($this->employee);
+
+        $response = $this->postJson("/api/v1/pass-slips/{$slip->id}/submit");
+
+        $response->assertStatus(200)
+            ->assertJson(['success' => true]);
+
+        $slip->refresh();
+        $this->assertEquals(PassSlipStatus::Submitted, $slip->status);
+        $this->assertNull($slip->returned_reason);
+    }
+
+    public function test_admin_can_cancel_approved_slip(): void
+    {
+        $slip = PassSlip::factory()->approved()->create([
+            'creator_id' => $this->employee->id,
+            'department_id' => $this->department->id,
+        ]);
+
+        Sanctum::actingAs($this->admin);
+
+        $response = $this->postJson("/api/v1/pass-slips/{$slip->id}/cancel");
+
+        $response->assertStatus(200)
+            ->assertJson(['success' => true, 'message' => 'Pass slip cancelled.']);
+
+        $this->assertDatabaseHas('pass_slips', [
+            'id' => $slip->id,
+            'status' => PassSlipStatus::Cancelled->value,
+        ]);
+    }
+
+    public function test_state_transitions_are_audit_logged(): void
+    {
+        Sanctum::actingAs($this->employee);
+
+        $slip = PassSlip::factory()->draft()->create([
+            'creator_id' => $this->employee->id,
+            'department_id' => $this->department->id,
+        ]);
+
+        $this->postJson("/api/v1/pass-slips/{$slip->id}/submit");
+
+        $this->assertDatabaseHas('audit_logs', [
+            'auditable_type' => PassSlip::class,
+            'auditable_id' => $slip->id,
+            'action' => 'state_transition',
+        ]);
+    }
+
+    public function test_employee_cannot_submit_other_employees_slip(): void
+    {
+        $other = User::factory()->create();
+        $other->assignRole('Employee');
+
+        $slip = PassSlip::factory()->draft()->create([
+            'creator_id' => $other->id,
+            'department_id' => $this->department->id,
+        ]);
+
+        Sanctum::actingAs($this->employee);
+
+        $response = $this->postJson("/api/v1/pass-slips/{$slip->id}/submit");
+
+        $response->assertStatus(403);
     }
 }

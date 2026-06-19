@@ -74,6 +74,13 @@ class PassSlip extends Model
                 $slip->qr_code = (string) Str::uuid();
             }
         });
+
+        static::created(function (PassSlip $slip) {
+            AuditLog::log('created', $slip, null, [
+                'slip_number' => $slip->slip_number,
+                'status' => $slip->status->value,
+            ]);
+        });
     }
 
     // --- Relationships ---
@@ -116,13 +123,26 @@ class PassSlip extends Model
     }
 
     // --- State Transitions ---
+    // Every transition is recorded in the audit log (spec: "All transitions are audit logged").
 
     public function submit(): bool
     {
-        if ($this->status !== PassSlipStatus::Draft) {
+        // Draft slips can be submitted; Returned slips can be resubmitted (spec alternate path).
+        if (! in_array($this->status, [PassSlipStatus::Draft, PassSlipStatus::Returned], true)) {
             return false;
         }
-        return $this->update(['status' => PassSlipStatus::Submitted]);
+
+        $old = ['status' => $this->status->value];
+        $updated = $this->update([
+            'status' => PassSlipStatus::Submitted,
+            'returned_reason' => null,
+        ]);
+
+        if ($updated) {
+            $this->logTransition($old, ['status' => PassSlipStatus::Submitted->value]);
+        }
+
+        return $updated;
     }
 
     public function approve(User $approver): bool
@@ -130,11 +150,22 @@ class PassSlip extends Model
         if ($this->status !== PassSlipStatus::Submitted) {
             return false;
         }
-        return $this->update([
+
+        $old = ['status' => $this->status->value];
+        $updated = $this->update([
             'status' => PassSlipStatus::Approved,
             'approver_id' => $approver->id,
             'approved_at' => now(),
         ]);
+
+        if ($updated) {
+            $this->logTransition($old, [
+                'status' => PassSlipStatus::Approved->value,
+                'approver_id' => $approver->id,
+            ]);
+        }
+
+        return $updated;
     }
 
     public function returnWithReason(User $supervisor, string $reason): bool
@@ -142,11 +173,22 @@ class PassSlip extends Model
         if ($this->status !== PassSlipStatus::Submitted) {
             return false;
         }
-        return $this->update([
+
+        $old = ['status' => $this->status->value];
+        $updated = $this->update([
             'status' => PassSlipStatus::Returned,
             'returned_reason' => $reason,
             'supervisor_id' => $supervisor->id,
         ]);
+
+        if ($updated) {
+            $this->logTransition($old, [
+                'status' => PassSlipStatus::Returned->value,
+                'returned_reason' => $reason,
+            ]);
+        }
+
+        return $updated;
     }
 
     public function depart(): bool
@@ -154,10 +196,18 @@ class PassSlip extends Model
         if ($this->status !== PassSlipStatus::Approved) {
             return false;
         }
-        return $this->update([
+
+        $old = ['status' => $this->status->value];
+        $updated = $this->update([
             'status' => PassSlipStatus::Departed,
             'departure_time' => now(),
         ]);
+
+        if ($updated) {
+            $this->logTransition($old, ['status' => PassSlipStatus::Departed->value]);
+        }
+
+        return $updated;
     }
 
     public function arrive(): bool
@@ -166,17 +216,28 @@ class PassSlip extends Model
             return false;
         }
 
+        $old = ['status' => $this->status->value];
+
         $updates = [
             'status' => PassSlipStatus::Arrived,
             'arrival_time' => now(),
         ];
 
+        $new = ['status' => PassSlipStatus::Arrived->value];
+
         if ($this->departure_time) {
             $duration = $this->departure_time->diffInMinutes(now()) / 60;
             $updates['duration_hours'] = round($duration, 2);
+            $new['duration_hours'] = $updates['duration_hours'];
         }
 
-        return $this->update($updates);
+        $updated = $this->update($updates);
+
+        if ($updated) {
+            $this->logTransition($old, $new);
+        }
+
+        return $updated;
     }
 
     public function submitCertificate(): bool
@@ -184,7 +245,15 @@ class PassSlip extends Model
         if ($this->status !== PassSlipStatus::Arrived) {
             return false;
         }
-        return $this->update(['status' => PassSlipStatus::CertificateSubmitted]);
+
+        $old = ['status' => $this->status->value];
+        $updated = $this->update(['status' => PassSlipStatus::CertificateSubmitted]);
+
+        if ($updated) {
+            $this->logTransition($old, ['status' => PassSlipStatus::CertificateSubmitted->value]);
+        }
+
+        return $updated;
     }
 
     public function verify(): bool
@@ -192,7 +261,15 @@ class PassSlip extends Model
         if ($this->status !== PassSlipStatus::CertificateSubmitted) {
             return false;
         }
-        return $this->update(['status' => PassSlipStatus::Verified]);
+
+        $old = ['status' => $this->status->value];
+        $updated = $this->update(['status' => PassSlipStatus::Verified]);
+
+        if ($updated) {
+            $this->logTransition($old, ['status' => PassSlipStatus::Verified->value]);
+        }
+
+        return $updated;
     }
 
     public function complete(): bool
@@ -200,21 +277,61 @@ class PassSlip extends Model
         if ($this->status !== PassSlipStatus::Verified) {
             return false;
         }
-        return $this->update([
+
+        $old = ['status' => $this->status->value];
+        $updated = $this->update([
             'status' => PassSlipStatus::Completed,
             'completed_at' => now(),
         ]);
+
+        if ($updated) {
+            $this->logTransition($old, ['status' => PassSlipStatus::Completed->value]);
+        }
+
+        return $updated;
     }
 
-    public function cancel(): bool
+    public function cancel(?User $actor = null): bool
     {
-        if (!$this->status->canBeCancelled()) {
+        if (! in_array($this->status, $this->cancellableStatusesFor($actor), true)) {
             return false;
         }
-        return $this->update([
+
+        $old = ['status' => $this->status->value];
+        $updated = $this->update([
             'status' => PassSlipStatus::Cancelled,
             'cancelled_at' => now(),
         ]);
+
+        if ($updated) {
+            $this->logTransition($old, ['status' => PassSlipStatus::Cancelled->value]);
+        }
+
+        return $updated;
+    }
+
+    /**
+     * Statuses that may be cancelled, scoped to the acting user's role.
+     * Employees may only cancel Draft/Submitted slips they own; Admins and
+     * Supervisors may additionally cancel Approved slips (spec alternate path).
+     */
+    protected function cancellableStatusesFor(?User $user): array
+    {
+        $statuses = [PassSlipStatus::Draft, PassSlipStatus::Submitted];
+
+        if ($user && ($user->hasRole('Admin') || $user->hasRole('Supervisor'))) {
+            $statuses[] = PassSlipStatus::Approved;
+        }
+
+        return $statuses;
+    }
+
+    /**
+     * Record a state transition in the audit log.
+     */
+    protected function logTransition(array $old, array $new): void
+    {
+        AuditLog::log('state_transition', $this, $old, $new);
     }
 
     // --- Scopes ---

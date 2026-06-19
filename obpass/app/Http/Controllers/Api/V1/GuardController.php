@@ -19,6 +19,8 @@ class GuardController extends Controller
 
     public function searchSlip(Request $request): JsonResponse
     {
+        abort_unless($request->user()->hasPermissionTo('pass_slip.scan_qr'), 403);
+
         $request->validate(['slip_number' => ['required', 'string']]);
 
         $passSlip = PassSlip::where('slip_number', $request->slip_number)
@@ -34,6 +36,8 @@ class GuardController extends Controller
 
     public function scanQr(Request $request): JsonResponse
     {
+        abort_unless($request->user()->hasPermissionTo('pass_slip.scan_qr'), 403);
+
         $request->validate(['qr_code' => ['required', 'string']]);
 
         $passSlip = PassSlip::where('qr_code', $request->qr_code)
@@ -49,6 +53,8 @@ class GuardController extends Controller
 
     public function logDeparture(Request $request, PassSlip $pass_slip, NotificationService $notifications): JsonResponse
     {
+        $this->authorize('logDeparture', $pass_slip);
+
         if (! $pass_slip->depart()) {
             return $this->errorResponse('Only approved pass slips can be departed.', 422);
         }
@@ -64,6 +70,8 @@ class GuardController extends Controller
 
     public function logArrival(Request $request, PassSlip $pass_slip, NotificationService $notifications): JsonResponse
     {
+        $this->authorize('logArrival', $pass_slip);
+
         if (! $pass_slip->arrive()) {
             return $this->errorResponse('Only departed pass slips can have arrival logged.', 422);
         }

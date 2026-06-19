@@ -244,6 +244,13 @@ class PassSlipResource extends Resource
             ->actions([
                 Tables\Actions\ViewAction::make(),
                 Tables\Actions\EditAction::make(),
+                Tables\Actions\Action::make('complete')
+                    ->label('Complete')
+                    ->icon('heroicon-o-check-badge')
+                    ->color('success')
+                    ->requiresConfirmation()
+                    ->visible(fn (PassSlip $record): bool => $record->status === PassSlipStatus::Verified)
+                    ->action(fn (PassSlip $record) => $record->complete()),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([

@@ -250,4 +250,27 @@ class GuardTest extends TestCase
         $this->assertNotNull($slip->duration_hours);
         $this->assertGreaterThan(0, (float) $slip->duration_hours);
     }
+
+    public function test_non_guard_cannot_log_departure(): void
+    {
+        $slip = PassSlip::factory()->approved()->create([
+            'creator_id' => $this->employee->id,
+            'department_id' => $this->department->id,
+        ]);
+
+        Sanctum::actingAs($this->employee); // Employee, not Guard
+
+        $response = $this->postJson("/api/v1/guard/log-departure/{$slip->id}");
+
+        $response->assertStatus(403);
+    }
+
+    public function test_non_guard_cannot_scan_qr(): void
+    {
+        Sanctum::actingAs($this->employee); // Employee, not Guard
+
+        $response = $this->postJson('/api/v1/guard/scan-qr', ['qr_code' => 'anything']);
+
+        $response->assertStatus(403);
+    }
 }

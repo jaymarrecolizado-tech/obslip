@@ -50,9 +50,8 @@ class PassSlipPolicy
             return false;
         }
 
-        // Can only edit own drafts
-        return $passSlip->creator_id === $user->id
-            && $passSlip->status === PassSlipStatus::Draft;
+        // Ownership only; status enforcement (draft-only) is handled by the controller.
+        return $passSlip->creator_id === $user->id;
     }
 
     public function delete(User $user, PassSlip $passSlip): bool
@@ -61,9 +60,33 @@ class PassSlipPolicy
             return false;
         }
 
-        // Employee can cancel only Draft or Submitted slips they created
+        // Ownership only; status enforcement (draft-only) is handled by the controller.
+        return $passSlip->creator_id === $user->id;
+    }
+
+    public function submit(User $user, PassSlip $passSlip): bool
+    {
+        // The creator, an admin, or the slip's department supervisor may submit/resubmit.
         return $passSlip->creator_id === $user->id
-            && in_array($passSlip->status, [PassSlipStatus::Draft, PassSlipStatus::Submitted]);
+            || $user->hasRole('Admin')
+            || ($user->hasRole('Supervisor') && $passSlip->department_id === $user->department_id);
+    }
+
+    public function cancel(User $user, PassSlip $passSlip): bool
+    {
+        // Admins may cancel any non-terminal slip.
+        if ($user->hasRole('Admin')) {
+            return true;
+        }
+
+        // Supervisors may cancel slips in their own department.
+        if ($user->hasRole('Supervisor') && $passSlip->department_id === $user->department_id) {
+            return true;
+        }
+
+        // Employees may cancel their own slips (status scope enforced by the model).
+        return $user->hasPermissionTo('pass_slip.cancel_own')
+            && $passSlip->creator_id === $user->id;
     }
 
     public function approve(User $user, PassSlip $passSlip): bool
@@ -86,29 +109,20 @@ class PassSlipPolicy
             return false;
         }
 
-        if ($passSlip->status !== PassSlipStatus::Submitted) {
-            return false;
-        }
-
+        // Status enforcement (submitted-only) is handled by the model.
         return $passSlip->department_id === $user->department_id;
     }
 
     public function logDeparture(User $user, PassSlip $passSlip): bool
     {
-        if (!$user->hasPermissionTo('pass_slip.log_departure')) {
-            return false;
-        }
-
-        return $passSlip->status === PassSlipStatus::Approved;
+        // Guard-only; status enforcement (approved-only) is handled by the model.
+        return $user->hasPermissionTo('pass_slip.log_departure');
     }
 
     public function logArrival(User $user, PassSlip $passSlip): bool
     {
-        if (!$user->hasPermissionTo('pass_slip.log_arrival')) {
-            return false;
-        }
-
-        return $passSlip->status === PassSlipStatus::Departed;
+        // Guard-only; status enforcement (departed-only) is handled by the model.
+        return $user->hasPermissionTo('pass_slip.log_arrival');
     }
 
     public function scanQr(User $user, PassSlip $passSlip): bool
